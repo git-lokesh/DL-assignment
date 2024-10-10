@@ -1,142 +1,94 @@
-import torch
-import torch.nn as nn
+import numpy as np
+import pandas as pd
+import cv2
+import matplotlib.pyplot as plt
+import gluoncv
+from gluoncv import model_zoo, data, utils
+from pathlib import Path
+import random
+import os
+from skimage import io
+from pycocotools.coco import COCO
+import matplotlib.patches as patches
+import time
+import mxnet as mx
 
-class ResNetBlock(nn.Module):
-    def __init__(self, in_channels, intermediate_channels, identity_downsample=None, stride=1):
-        super(ResNetBlock, self).__init__()
-        self.expansion = 4
-        self.resnet_conv1 = nn.Conv2d(
-            in_channels,
-            intermediate_channels,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=False,
+DATA_PATH = "/kaggle/input/coco-2017-dataset/coco2017/val2017/"
+annotation_file = Path('/kaggle/input/coco-2017-dataset/coco2017/annotations/instances_val2017.json')
+
+coco_api = COCO(annotation_file)
+image_ids = coco_api.getImgIds()
+
+def get_random_image():
+    img_id = random.choice(image_ids)
+    img_metadata = coco_api.loadImgs([img_id])
+    img = io.imread(DATA_PATH + img_metadata[0]['file_name'])
+    ann_ids = coco_api.getAnnIds(imgIds=[img_id])
+    annotations = coco_api.loadAnns(ann_ids)
+    return img, annotations
+
+def test_model(model, image):
+    mx_image = mx.nd.array(image)
+    x, original_image = data.transforms.presets.rcnn.transform_test(mx_image)
+
+    start_time = time.time()
+    box_ids, scores, bboxes = model(x)
+    elapsed_time = time.time() - start_time
+
+    ax = utils.viz.plot_bbox(original_image, bboxes[0], scores[0], box_ids[0], class_names=model.classes)
+    return ax, elapsed_time
+
+rcnn_model = model_zoo.get_model('faster_rcnn_resnet50_v1b_coco', pretrained=True)
+
+def display_ground_truth(image, boxes):
+    copy_image = image.copy()
+    fig, ax = plt.subplots()
+    ax.imshow(copy_image)
+    for box in boxes:
+        rect = patches.Rectangle(
+            (int(box['bbox'][0]), int(box['bbox'][1])),
+            int(box['bbox'][2]), int(box['bbox'][3]),
+            linewidth=1, edgecolor='r', facecolor='none'
         )
-        self.resnet_bn1 = nn.BatchNorm2d(intermediate_channels)
-        self.resnet_conv2 = nn.Conv2d(
-            intermediate_channels,
-            intermediate_channels,
-            kernel_size=3,
-            stride=stride,
-            padding=1,
-            bias=False,
-        )
-        self.resnet_bn2 = nn.BatchNorm2d(intermediate_channels)
-        self.resnet_conv3 = nn.Conv2d(
-            intermediate_channels,
-            intermediate_channels * self.expansion,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-            bias=False,
-        )
-        self.resnet_bn3 = nn.BatchNorm2d(intermediate_channels * self.expansion)
-        self.resnet_relu = nn.ReLU()
-        self.identity_downsample = identity_downsample
+        ax.add_patch(rect)
+    ax.set_title("Ground Truth")
+    plt.show()
 
-    def forward(self, x):
-        identity = x.clone()
+random_image, random_annotations = get_random_image()
+plt.imshow(random_image)
+display_ground_truth(random_image, random_annotations)
 
-        x = self.resnet_conv1(x)
-        x = self.resnet_bn1(x)
-        x = self.resnet_relu(x)
-        x = self.resnet_conv2(x)
-        x = self.resnet_bn2(x)
-        x = self.resnet_relu(x)
-        x = self.resnet_conv3(x)
-        x = self.resnet_bn3(x)
+ax, elapsed_time = test_model(rcnn_model, random_image)
+ax.set_title(f"Faster R-CNN \n Time taken: {round(elapsed_time, 4)} seconds")
+plt.show()
 
-        if self.identity_downsample is not None:
-            identity = self.identity_downsample(identity)
+random_image, random_annotations = get_random_image()
+display_ground_truth(random_image, random_annotations)
 
-        x += identity
-        x = self.resnet_relu(x)
-        return x
+ax1, elapsed_time_1 = test_model(rcnn_model, random_image)
+ax1.set_title(f"Faster R-CNN \n Time taken: {round(elapsed_time_1, 4)} seconds")
+plt.show()
 
+def generate_random_voc_image():
+    voc_image_path = "/kaggle/input/pascal-voc-2012/VOC2012/JPEGImages/"
+    img_path = random.choice(os.listdir(voc_image_path))
+    return io.imread(voc_image_path + img_path)
 
-class ResNet(nn.Module):
-    def __init__(self, block, layers, image_channels, num_classes):
-        super(ResNet, self).__init__()
-        self.in_channels = 64
-        self.resnet_conv1 = nn.Conv2d(
-            image_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
-        )
-        self.resnet_bn1 = nn.BatchNorm2d(64)
-        self.resnet_relu = nn.ReLU()
-        self.resnet_maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+voc_image = generate_random_voc_image()
+ax2, elapsed_time_2 = test_model(rcnn_model, voc_image)
+ax2.set_title(f"Faster R-CNN on VOC Image \n Time taken: {round(elapsed_time_2, 4)} seconds")
+plt.show()
 
-        # ResNet architecture layers
-        self.resnet_layer1 = self._make_layer(block, layers[0], intermediate_channels=64, stride=1)
-        self.resnet_layer2 = self._make_layer(block, layers[1], intermediate_channels=128, stride=2)
-        self.resnet_layer3 = self._make_layer(block, layers[2], intermediate_channels=256, stride=2)
-        self.resnet_layer4 = self._make_layer(block, layers[3], intermediate_channels=512, stride=2)
+custom_image_paths = [
+    "/kaggle/input/test-model-by-me/OIP.jpg",
+    "/kaggle/input/test-model-by-me/test4.jpg",
+    "/kaggle/input/test-model-by-me/test5.jpg",
+    "/kaggle/input/test-model-by-me/test8.jpg",
+    "/kaggle/input/test-model-by-me/test 9.PNG"
+]
 
-        self.resnet_avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.resnet_fc = nn.Linear(512 * 4, num_classes)
-
-    def forward(self, x):
-        x = self.resnet_conv1(x)
-        x = self.resnet_bn1(x)
-        x = self.resnet_relu(x)
-        x = self.resnet_maxpool(x)
-        x = self.resnet_layer1(x)
-        x = self.resnet_layer2(x)
-        x = self.resnet_layer3(x)
-        x = self.resnet_layer4(x)
-
-        x = self.resnet_avgpool(x)
-        x = x.reshape(x.shape[0], -1)
-        x = self.resnet_fc(x)
-
-        return x
-
-    def _make_layer(self, block, num_residual_blocks, intermediate_channels, stride):
-        identity_downsample = None
-        layers = []
-
-        if stride != 1 or self.in_channels != intermediate_channels * 4:
-            identity_downsample = nn.Sequential(
-                nn.Conv2d(
-                    self.in_channels,
-                    intermediate_channels * 4,
-                    kernel_size=1,
-                    stride=stride,
-                    bias=False,
-                ),
-                nn.BatchNorm2d(intermediate_channels * 4),
-            )
-
-        layers.append(block(self.in_channels, intermediate_channels, identity_downsample, stride))
-        self.in_channels = intermediate_channels * 4
-
-        for _ in range(num_residual_blocks - 1):
-            layers.append(block(self.in_channels, intermediate_channels))
-
-        return nn.Sequential(*layers)
-
-
-def ResNet50(img_channel=3, num_classes=1000):
-    return ResNet(ResNetBlock, [3, 4, 6, 3], img_channel, num_classes)
-
-
-def ResNet101(img_channel=3, num_classes=1000):
-    return ResNet(ResNetBlock, [3, 4, 23, 3], img_channel, num_classes)
-
-
-def ResNet152(img_channel=3, num_classes=1000):
-    return ResNet(ResNetBlock, [3, 8, 36, 3], img_channel, num_classes)
-
-
-def test():
-    BATCH_SIZE = 4
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = ResNet101(img_channel=3, num_classes=1000).to(device)
-    y = net(torch.randn(BATCH_SIZE, 3, 224, 224)).to(device)
-    assert y.size() == torch.Size([BATCH_SIZE, 1000])
-    print(y.size())
-
-
-if __name__ == "__main__":
-    test()
-# OUTPUT : ([4 ,1000])
+for path in custom_image_paths:
+    img = cv2.imread(path)
+    ax, elapsed_time = test_model(rcnn_model, img)
+    ax.set_title(f"Faster R-CNN \n Time taken: {round(elapsed_time, 4)} seconds")
+    plt.show()
